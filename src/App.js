@@ -1,12 +1,15 @@
+// src/App.js - COMPLETE AND CORRECTED CODE FOR AWS AMPLIFY V6+
 import React, { useState, useEffect } from 'react';
 import { LogIn, User, Calendar, PlusCircle, List, DollarSign, QrCode, Ticket, Users, BarChart, Settings, Home, XCircle, CheckCircle, Upload } from 'lucide-react';
-import { Amplify, API, Auth } from 'aws-amplify';
+import { Amplify } from 'aws-amplify'; // Only import Amplify itself for v6+
 import awsExports from './aws-exports';
 
 // Import your actual Login and Signup components
-import LoginPage from './components/LoginPage'; // Assuming you put it in src/components
-import SignupPage from './components/SignupPage'; // Assuming you put it in src/components
+import LoginPage from './components/LoginPage';
+import SignupPage from './components/SignupPage';
 
+// Configure Amplify here as well, although it's also configured in index.js
+// It's good practice to ensure it's configured wherever Amplify operations are performed.
 Amplify.configure(awsExports);
 
 // Main App Component
@@ -17,22 +20,25 @@ const App = () => {
   const [registrations, setRegistrations] = useState([]);
   const [tickets, setTickets] = useState([]);
 
+  // State for file upload
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState('');
+
   // Check current authentication status on app load
   useEffect(() => {
     const checkUser = async () => {
       try {
-        const user = await Auth.currentAuthenticatedUser();
+        const user = await Amplify.Auth.currentAuthenticatedUser(); // Changed
         const { signInUserSession } = user;
-        // Cognito groups are typically found in the accessToken payload
         const groups = signInUserSession.accessToken.payload["cognito:groups"];
-        let role = 'attendee'; // Default role if no specific group
+        let role = 'attendee';
         if (groups && groups.includes('Organizers')) {
           role = 'organizer';
         } else if (groups && groups.includes('Admins')) {
           role = 'admin';
         }
         setCurrentUser({ username: user.username, email: user.attributes.email, role: role });
-        // Redirect to dashboard if logged in
         if (role === 'admin') {
           setCurrentPage('admin-dashboard');
         } else {
@@ -41,25 +47,22 @@ const App = () => {
       } catch (error) {
         console.log('No user currently authenticated:', error);
         setCurrentUser(null);
-        setCurrentPage('home'); // Go to home if not logged in
+        setCurrentPage('home');
       }
     };
 
     checkUser();
-    // Fetch data even if not logged in to populate public sections like event list
     fetchEvents();
-    // Only fetch registrations/tickets if a user is logged in (or handle permissions in your API)
     if (currentUser) {
         fetchRegistrations();
         fetchTickets();
     }
-  }, [currentUser]); // Dependency array includes currentUser to re-run when user state changes
+  }, [currentUser]);
 
   // --- Cognito Authentication Functions ---
-
   const handleLogin = async (email, password) => {
     try {
-      const user = await Auth.signIn(email, password);
+      const user = await Amplify.Auth.signIn(email, password); // Changed
       const { signInUserSession } = user;
       const groups = signInUserSession.accessToken.payload["cognito:groups"];
       let role = 'attendee';
@@ -68,47 +71,44 @@ const App = () => {
       } else if (groups && groups.includes('Admins')) {
         role = 'admin';
       }
-      setCurrentUser({ username: user.username, email: user.attributes.email, role: role }); // Use user.attributes.email for consistency
+      setCurrentUser({ username: user.username, email: user.attributes.email, role: role });
       alert('Login successful!');
       if (role === 'admin') {
         setCurrentPage('admin-dashboard');
       } else {
         setCurrentPage('user-dashboard');
       }
-      return user; // Return user object for LoginPage to handle success
+      return user;
     } catch (error) {
       console.error('Error logging in:', error);
-      throw error; // Re-throw to be caught by the LoginPage component
+      throw error;
     }
   };
 
   const handleSignup = async (email, password, attributes) => {
     try {
-      // Cognito uses username for unique identification, often email for user pools
-      // `attributes` object should contain additional user attributes like email, custom:role
-      const user = await Auth.signUp({
-        username: email, // Using email as the username
+      const user = await Amplify.Auth.signUp({ // Changed
+        username: email,
         password,
         attributes: {
-          email, // Standard attribute
-          'custom:role': attributes['custom:role'] // Your custom role attribute if defined in Cognito
+          email,
+          'custom:role': attributes['custom:role']
         },
       });
       console.log('Signup successful, user needs confirmation:', user);
       alert('Verification code sent to your email. Please verify your account.');
-      return user; // Return user object for SignupPage to handle showing confirmation form
+      return user;
     } catch (error) {
       console.error('Error signing up:', error);
       throw error;
     }
   };
 
-  // Attach a confirm method to handleSignup for the SignupPage component
   handleSignup.confirm = async (email, code) => {
     try {
-      await Auth.confirmSignUp(email, code);
+      await Amplify.Auth.confirmSignUp(email, code); // Changed
       alert('Account confirmed successfully! You can now log in.');
-      setCurrentPage('login'); // Redirect to login after confirmation
+      setCurrentPage('login');
     } catch (error) {
       console.error('Error confirming signup:', error);
       throw error;
@@ -117,7 +117,7 @@ const App = () => {
 
   const handleSignOut = async () => {
     try {
-      await Auth.signOut();
+      await Amplify.Auth.signOut(); // Changed
       setCurrentUser(null);
       setCurrentPage('home');
       alert('You have been logged out.');
@@ -126,6 +126,46 @@ const App = () => {
       alert('Logout failed: ' + error.message);
     }
   };
+
+  // --- AWS S3 Storage Upload Function (NEW) ---
+  const handleFileChange = (event) => {
+    setSelectedFile(event.target.files[0]);
+    setUploadMessage('');
+  };
+
+  const handleUploadFile = async () => {
+    if (!selectedFile) {
+      setUploadMessage('Please select a file first.');
+      return;
+    }
+    if (!currentUser) {
+        setUploadMessage('You must be logged in to upload files.');
+        return;
+    }
+
+    setUploading(true);
+    setUploadMessage('Uploading...');
+    try {
+      const filename = `public/uploads/${currentUser.username}/${Date.now()}-${selectedFile.name}`; // Example path: public/uploads/john.doe@example.com/timestamp-image.jpg
+
+      await Amplify.Storage.put(filename, selectedFile, { // Changed
+        contentType: selectedFile.type, // Set the content type
+        level: 'public', // Or 'private' or 'protected' depending on your S3 bucket configuration and access
+        progressCallback(progress) {
+          console.log(`Uploaded: ${progress.loaded}/${progress.total}`);
+          setUploadMessage(`Uploading: ${Math.round((progress.loaded / progress.total) * 100)}%`);
+        }
+      });
+      setUploadMessage('File uploaded successfully!');
+      setSelectedFile(null); // Clear selected file after upload
+    } catch (error) {
+      console.error('Error uploading file:', error);
+      setUploadMessage(`Upload failed: ${error.message}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+
 
   // --- DynamoDB Interaction Functions ---
 
@@ -221,7 +261,7 @@ const App = () => {
   // Function to fetch events
   const fetchEvents = async () => {
     try {
-      const eventData = await API.graphql({ query: listEvents });
+      const eventData = await Amplify.API.graphql({ query: listEvents }); // Changed
       setEvents(eventData.data.listEvents.items);
     } catch (error) {
       console.error("Error fetching events:", error);
@@ -231,7 +271,7 @@ const App = () => {
   // Function to fetch registrations
   const fetchRegistrations = async () => {
     try {
-      const registrationData = await API.graphql({ query: listRegistrations });
+      const registrationData = await Amplify.API.graphql({ query: listRegistrations }); // Changed
       setRegistrations(registrationData.data.listRegistrations.items);
     } catch (error) {
       console.error("Error fetching registrations:", error);
@@ -241,7 +281,7 @@ const App = () => {
   // Function to fetch tickets
   const fetchTickets = async () => {
     try {
-      const ticketData = await API.graphql({ query: listTickets });
+      const ticketData = await Amplify.API.graphql({ query: listTickets }); // Changed
       setTickets(ticketData.data.listTickets.items);
     } catch (error) {
       console.error("Error fetching tickets:", error);
@@ -251,7 +291,7 @@ const App = () => {
   // Add Event Function (Now interacts with DynamoDB)
   const handleAddEvent = async (newEvent) => {
     try {
-      const result = await API.graphql({
+      const result = await Amplify.API.graphql({ // Changed
         query: createEventMutation,
         variables: { input: newEvent }
       });
@@ -273,7 +313,7 @@ const App = () => {
       ticketId: null // You might generate this server-side or after ticket creation
     };
     try {
-      const result = await API.graphql({
+      const result = await Amplify.API.graphql({ // Changed
         query: createRegistrationMutation,
         variables: { input: newRegistration }
       });
@@ -295,7 +335,7 @@ const App = () => {
       registrationId
     };
     try {
-      const result = await API.graphql({
+      const result = await Amplify.API.graphql({ // Changed
         query: createTicketMutation,
         variables: { input: newTicket }
       });
@@ -311,7 +351,7 @@ const App = () => {
   // Mark Ticket Scanned Function (Interacts with DynamoDB to update ticket status)
   const handleMarkTicketScanned = async (ticketId) => {
     try {
-      await API.graphql({
+      await Amplify.API.graphql({ // Changed
         query: updateTicketMutation,
         variables: { input: { id: ticketId, status: "SCANNED" } }
       });
@@ -507,6 +547,47 @@ const App = () => {
         ) : (
           <p className="text-center text-gray-500 py-8">No tickets issued yet.</p>
         )}
+
+        {/* File Upload Section (NEW) */}
+        <h3 className="text-2xl font-semibold text-gray-800 mb-4 mt-8">Upload Files to S3</h3>
+        <div className="bg-white p-6 rounded-xl shadow-md border border-gray-100">
+          <div className="mb-4">
+            <label htmlFor="file-upload" className="block text-gray-700 text-sm font-bold mb-2">Select File:</label>
+            <input
+              type="file"
+              id="file-upload"
+              onChange={handleFileChange}
+              className="block w-full text-sm text-gray-500
+                         file:mr-4 file:py-2 file:px-4
+                         file:rounded-full file:border-0
+                         file:text-sm file:font-semibold
+                         file:bg-blue-50 file:text-blue-700
+                         hover:file:bg-blue-100"
+            />
+          </div>
+          <button
+            onClick={handleUploadFile}
+            disabled={!selectedFile || uploading}
+            className={`py-2 px-4 rounded-lg focus:outline-none focus:shadow-outline transition duration-300 ease-in-out flex items-center justify-center text-sm
+              ${(!selectedFile || uploading) ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+          >
+            {uploading ? (
+              <>
+                <Upload className="w-4 h-4 mr-2 animate-pulse" /> Uploading...
+              </>
+            ) : (
+              <>
+                <Upload className="w-4 h-4 mr-2" /> Upload to S3
+              </>
+            )}
+          </button>
+          {uploadMessage && (
+            <p className={`mt-3 text-sm ${uploadMessage.includes('failed') ? 'text-red-600' : 'text-green-600'}`}>
+              {uploadMessage}
+            </p>
+          )}
+        </div>
+
       </div>
     );
   };
